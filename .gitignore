@@ -1,0 +1,11 @@
+.env
+node_modules
+package-lock.json
+docker-compose.yaml
+query.sql
+tablas.sql
+tablas_sql_server.sql
+inter_pru.db
+inter2.db
+inter2.db
+pruebas.json
