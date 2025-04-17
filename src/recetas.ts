@@ -115,25 +115,6 @@ export async function keepAliveRecetas() {
         await transaction.commit();
         console.log('Registros procesados correctamente.');
 
-        // Eliminar duplicados en la tabla REPORTES.dbo.recetas
-        await connection2.request().query(`
-            WITH CTE AS (
-                SELECT 
-                    CodProd, 
-                    CodMat, 
-                    DesProd, 
-                    CantMat,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY CodProd, CodMat, DesProd, CantMat 
-                        ORDER BY (SELECT NULL)
-                    ) AS RowNum
-                FROM REPORTES.dbo.recetas
-            )
-            DELETE FROM CTE WHERE RowNum > 1;
-        `);
-
-        console.log('Duplicados eliminados correctamente.');
-
     } catch (err) {
         console.error('Error en proceso:', err);
     } finally {
