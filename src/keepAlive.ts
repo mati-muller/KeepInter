@@ -235,5 +235,5 @@ export async function keepAlive() {
         if (connection2?.connected) await connection2.close();
     }
 
-    setTimeout(keepAlive, 2000);
+    setTimeout(keepAlive, 60000 ); 
 }

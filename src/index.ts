@@ -3,6 +3,7 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { keepAlive } from './keepAlive';
 import { keepAlive2 } from './keepAlive2';
+import { keepAliveRecetas } from './recetas';
 import cors from 'cors';
 const app = express();
 const PORT = 3001;
@@ -16,8 +17,13 @@ const limiter = rateLimit({
 
 app.use(limiter);
 
-keepAlive();
-keepAlive2();
+async function executeKeepAlives() {
+    await keepAlive();
+    await keepAlive2();
+    await keepAliveRecetas();
+}
+
+executeKeepAlives();
 
 app.get('/', (req: Request, res: Response) => {
     res.send('Vamos CTM');
