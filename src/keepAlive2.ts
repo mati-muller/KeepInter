@@ -1,7 +1,11 @@
 import sql from 'mssql';
 import { dbConfig2 } from './config';
 
+let isRunning = false;
+
 export async function keepAlive2() {
+    if (isRunning) return;
+    isRunning = true;
     let connection;
     let transactionActive = false;
 
@@ -51,7 +55,9 @@ export async function keepAlive2() {
 
     } finally {
         if (connection?.connected) await connection.close();
+        isRunning = false;
     }
-
-    setTimeout(keepAlive2, 1000 * 60 * 60 * 24); // Cada 24 horas
 }
+
+// Ejecutar cada 24 horas como antes
+setInterval(keepAlive2, 1000 * 60 * 60 * 24);

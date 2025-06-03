@@ -1,7 +1,11 @@
 import sql from 'mssql';
 import { dbConfig1, dbConfig2 } from './config';
 
+let isRunning = false;
+
 export async function keepAlive() {
+    if (isRunning) return;
+    isRunning = true;
     let connection1, connection2;
     let transactionActive = false;
     
@@ -26,6 +30,7 @@ export async function keepAlive() {
                 WHEN P.DescProc LIKE '%MULTI%' THEN 'MULTIPLE'
                 WHEN P.DescProc LIKE '%PEGA%' THEN 'PEGADO'
                 WHEN P.DescProc LIKE '%PLIZ%' THEN 'PLIZADO'
+                WHEN P.DescProc LIKE '%EMBAL%' THEN 'OTRO'
                 WHEN P.DescProc LIKE '%TROQUE%' THEN 'TROQUELADO'
                 WHEN P.DescProc LIKE '%TROZ%' THEN 'TROZADO'
                 ELSE 'OTRO' END PROCESO,
@@ -132,7 +137,7 @@ export async function keepAlive() {
                 VALUES (${insertColumns.map((col) => `@${col}`).join(', ')})
             `;
 
-            // 3. Procesar registros con conversión de tipos
+            // 3. Procesar registros with conversion of types
             let insertedCount = 0;
             for (const row of rows) {
                 // Conversión de tipos y manejo de valores
@@ -233,7 +238,9 @@ export async function keepAlive() {
     } finally {
         if (connection1?.connected) await connection1.close();
         if (connection2?.connected) await connection2.close();
+        isRunning = false;
     }
-
-    setTimeout(keepAlive, 60000 ); 
 }
+
+// Ejecutar cada 5 minutos para reducir carga
+setInterval(keepAlive, 5 * 60 * 1000);

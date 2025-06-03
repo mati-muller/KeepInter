@@ -1,7 +1,11 @@
 import sql from 'mssql';
 import { dbConfig1, dbConfig2 } from './config';
 
+let isRunning = false;
+
 export async function keepAliveRecetas() {
+    if (isRunning) return;
+    isRunning = true;
     let connection1, connection2;
 
     try {
@@ -120,8 +124,10 @@ export async function keepAliveRecetas() {
     } finally {
         if (connection1?.connected) await connection1.close();
         if (connection2?.connected) await connection2.close();
+        isRunning = false;
     }
-
-    setTimeout(keepAliveRecetas, 60000);
 }
+
+// Ejecutar cada 10 minutos para reducir carga
+setInterval(keepAliveRecetas, 10 * 60 * 1000);
 
