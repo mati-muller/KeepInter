@@ -147,6 +147,9 @@ export async function keepAlive() {
 
                 if (existingKeys.has(uniqueKey)) continue;
 
+                // Saltar si el proceso es 'EMBALADO'
+                if (String(row.PROCESO || '').toUpperCase() === 'EMBALADO') continue;
+
                 // Verificar si NVNUMERO está en la tabla nv_hechas
                 const nvHechasCheck = await transaction.request().query(`
                     SELECT 1 FROM REPORTES.dbo.nv_hechas WHERE NVENTA = ${nvNumber}
