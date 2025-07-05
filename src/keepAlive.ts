@@ -209,18 +209,18 @@ export async function keepAlive() {
 
             const insertProcesos2Statement = `
                 MERGE REPORTES.dbo.procesos2 AS target
-                USING (SELECT @ID AS ID, @CANT_PROD AS CANT_PROD) AS source
+                USING (SELECT @ID AS ID, @CANT_A_PROD AS CANT_A_PROD) AS source
                 ON (target.ID = source.ID)
-                WHEN MATCHED AND target.CANT_PROD IS NULL THEN 
-                    UPDATE SET CANT_PROD = source.CANT_PROD
+                WHEN MATCHED AND target.CANT_A_PROD IS NULL THEN 
+                    UPDATE SET CANT_A_PROD = source.CANT_A_PROD
                 WHEN NOT MATCHED THEN
-                    INSERT (ID, CANT_PROD) VALUES (source.ID, source.CANT_PROD);
+                    INSERT (ID, CANT_A_PROD) VALUES (source.ID, source.CANT_A_PROD);
             `;
 
             for (const row of procesosRows.recordset) {
                 await connection2.request()
                     .input('ID', sql.Int, row.ID)
-                    .input('CANT_PROD', sql.Int, row.NVCANT)
+                    .input('CANT_A_PROD', sql.Int, row.NVCANT)
                     .query(insertProcesos2Statement);
             }
 
