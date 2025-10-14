@@ -328,4 +328,4 @@ export async function keepAlive() {
 }
 
 // Ejecutar cada 5 minutos para reducir carga
-setInterval(keepAlive, 5 * 60 * 1000);
+setInterval(keepAlive, 2* 5 * 60 * 1000);
