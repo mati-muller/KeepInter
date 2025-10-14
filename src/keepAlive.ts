@@ -15,52 +15,80 @@ export async function keepAlive() {
         
         // Ejecutar consulta principal
         const result = await connection1.request().query(`
-            Select * from (
-                -- Notas de venta
-                Select det.NVNumero, ven.nvEstado, ven.nvFem fecha_nv, ven.nvFeEnt fecha_entrega, ven.ConcAuto , det.CodProd, 
-                det.nvCant, cant cant_fact, 
-                case when cant is null then det.nvcant else det.nvcant-cant end dif_fact, 
-                det.nvPrecio, det.DetProd, auxi.NomAux,
-                P.codProc,
+            SELECT
+                det.NVNumero,
+                ven.nvEstado,
+                ven.nvFem AS fecha_nv,
+                ven.nvFeEnt AS fecha_entrega,
+                ven.ConcAuto,
+                det.CodProd,
+                det.nvCant AS cant_vendida,
+                fact.cant AS cant_facturada,
+                (det.nvCant - ISNULL(fact.cant, 0)) AS dif_fact,
+                det.nvPrecio,
+                det.DetProd,
+                auxi.NomAux,
+
+                -- Procesos reales sin agrupar
+                P.CodProc,
                 CASE 
-                WHEN P.DescProc LIKE '%CALA%' THEN 'CALADO'
-                WHEN P.DescProc LIKE '%EMPLA%' THEN 'EMPLACADO'
-                WHEN P.DescProc LIKE '%ENCOL%' THEN 'ENCOLADO'
-                WHEN P.DescProc LIKE '%IMPR%' THEN 'IMPRESION'
-                WHEN P.DescProc LIKE '%MULTI%' THEN 'MULTIPLE'
-                WHEN P.DescProc LIKE '%PEGA%' THEN 'PEGADO'
-                WHEN P.DescProc LIKE '%PLIZ%' THEN 'PLIZADO'
-                WHEN P.DescProc LIKE '%EMBAL%' THEN 'OTRO'
-                WHEN P.DescProc LIKE '%TROQUE%' THEN 'TROQUELADO'
-                WHEN P.DescProc LIKE '%TROZ%' THEN 'TROZADO'
-                ELSE 'OTRO' END PROCESO,
-                P.DescProc, P.tiempo,P.CantProd
-                from PANELSA2017.softland.nw_detnv det
-                left join PANELSA2017.softland.nw_nventa ven on det.NVNumero=ven.NVNumero 
-                left join PANELSA2017.softland.cwtauxi auxi on ven.CodAux=auxi.CodAux 
-                left JOIN 
-                (
-                -- prod con proceso
-                Select prod.CodProd, prod.CodProc, DescProc, tiempo, CantProd from PANELSA2017.softland.dworproprod as prod
-                Left join (
-                -- Procesos
-                Select CodProc, DescProc, TpoEjecPro tiempo, CantProd  from PANELSA2017.softland.dwprocesos
-                ) as procesos on procesos.codproc=prod.codproc
-                group by CodProd, prod.CodProc, DescProc, tiempo, CantProd
-                ) P on det.codprod=P.codprod
-                left join (
-                -- facturas y notas de venta
-                SELECT gs.nvnumero, gm.CodProd, sum(cantfacturada) cant
-                FROM [PANELSA2017].[softland].[iw_gsaen] gs
-                left join [PANELSA2017].[softland].[iw_gmovi] gm on gs.NroInt=gm.NroInt 
-                where gs.Tipo in ('F','N')
-                group by gs.nvnumero, gm.codprod) fact on fact.nvnumero=det.NVNumero and fact.codprod=det.codprod
-                where nvEstado='A'
-                and det.NVNumero >=13215
-                and det.NVNumero not in (13388,13344,13433,13427) --cancelada
-            ) as subc
-            where dif_fact>0
-            ORDER BY NVNUMERO ASC
+                    WHEN P.DescProc LIKE '%CALA%' THEN 'CALADO'
+                    WHEN P.DescProc LIKE '%EMPLA%' THEN 'EMPLACADO'
+                    WHEN P.DescProc LIKE '%ENCOL%' THEN 'ENCOLADO'
+                    WHEN P.DescProc LIKE '%IMPR%' THEN 'IMPRESION'
+                    WHEN P.DescProc LIKE '%MULTI%' THEN 'MULTIPLE'
+                    WHEN P.DescProc LIKE '%PEGA%' THEN 'PEGADO'
+                    WHEN P.DescProc LIKE '%PLIZ%' THEN 'PLIZADO'
+                    WHEN P.DescProc LIKE '%EMBAL%' THEN 'OTRO'
+                    WHEN P.DescProc LIKE '%TROQUE%' THEN 'TROQUELADO'
+                    WHEN P.DescProc LIKE '%TROZ%' THEN 'TROZADO'
+                    ELSE 'OTRO'
+                END AS PROCESO,
+                P.DescProc,
+                P.tiempo,
+                P.CantProd
+
+            FROM PANELSA2017.softland.nw_detnv det
+            LEFT JOIN PANELSA2017.softland.nw_nventa ven 
+                ON det.NVNumero = ven.NVNumero
+            LEFT JOIN PANELSA2017.softland.cwtauxi auxi 
+                ON ven.CodAux = auxi.CodAux
+
+            -- Procesos (SIN GROUP BY, una fila por proceso)
+            LEFT JOIN (
+                SELECT 
+                    prod.CodProd, 
+                    prod.CodProc,
+                    procesos.DescProc, 
+                    procesos.TpoEjecPro AS tiempo,
+                    prod.CantProd
+                FROM PANELSA2017.softland.dworproprod prod
+                LEFT JOIN PANELSA2017.softland.dwprocesos procesos 
+                    ON procesos.CodProc = prod.CodProc
+            ) P 
+                ON det.CodProd = P.CodProd
+
+            -- Facturación por producto
+            LEFT JOIN (
+                SELECT 
+                    gs.nvnumero, 
+                    gm.CodProd, 
+                    SUM(gm.cantfacturada) AS cant
+                FROM PANELSA2017.softland.iw_gsaen gs
+                LEFT JOIN PANELSA2017.softland.iw_gmovi gm 
+                    ON gs.NroInt = gm.NroInt
+                WHERE gs.Tipo IN ('F','N')  -- Factura o Nota de Crédito/Débito
+                GROUP BY gs.nvnumero, gm.CodProd
+            ) fact 
+                ON fact.nvnumero = det.NVNumero
+                AND fact.CodProd = det.CodProd
+
+            WHERE ven.nvEstado = 'A'
+              AND det.NVNumero >= 13215
+              AND det.NVNumero NOT IN (13388,13344,13433,13427)
+              AND (det.nvCant - ISNULL(fact.cant, 0)) > 0  -- SOLO productos pendientes
+
+            ORDER BY det.NVNumero, det.CodProd, P.CodProc;
         `);
         
         const rows = result.recordset;
