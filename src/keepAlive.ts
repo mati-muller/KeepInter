@@ -45,8 +45,7 @@ export async function keepAlive() {
                     ELSE 'OTRO'
                 END AS PROCESO,
                 P.DescProc,
-                P.tiempo,
-                P.CantProd
+                P.tiempo
 
             FROM PANELSA2017.softland.nw_detnv det
             LEFT JOIN PANELSA2017.softland.nw_nventa ven 
@@ -60,8 +59,7 @@ export async function keepAlive() {
                     prod.CodProd, 
                     prod.CodProc,
                     procesos.DescProc, 
-                    procesos.TpoEjecPro AS tiempo,
-                    prod.CantProd
+                    procesos.TpoEjecPro AS tiempo
                 FROM PANELSA2017.softland.dworproprod prod
                 LEFT JOIN PANELSA2017.softland.dwprocesos procesos 
                     ON procesos.CodProc = prod.CodProc
@@ -116,8 +114,7 @@ export async function keepAlive() {
                 CODPROC NVARCHAR(MAX) DEFAULT NULL,
                 PROCESO NVARCHAR(MAX) DEFAULT NULL,
                 DESCPROC NVARCHAR(MAX) DEFAULT NULL,
-                TIEMPO INT DEFAULT NULL,
-                CANTPROD INT DEFAULT NULL
+                TIEMPO INT DEFAULT NULL
             );
             
             IF NOT EXISTS (SELECT * FROM REPORTES.INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'procesos2')
@@ -157,7 +154,7 @@ export async function keepAlive() {
                 'NVNUMERO', 'NVESTADO', 'FECHA_NV', 'FECHA_ENTREGA',
                 'CONCAUTO', 'CODPROD', 'NVCANT', 'CANT_FACT', 'DIF_FACT',
                 'NVPRECIO', 'DETPROD', 'NOMAUX', 'CODPROC', 'PROCESO',
-                'DESCPROC', 'TIEMPO', 'CANTPROD'
+                'DESCPROC', 'TIEMPO'
             ];
             
             const insertStatement = `
@@ -173,16 +170,23 @@ export async function keepAlive() {
                 const codProc = String(row.codProc || '').trim();
                 const uniqueKey = `${nvNumber}-${codProc}`;
 
-                if (existingKeys.has(uniqueKey)) continue;
-
-                // Saltar si el proceso es 'EMBALADO'
-                if (String(row.PROCESO || '').toUpperCase() === 'EMBALADO') continue;
+                if (String(row.PROCESO || '').toUpperCase() === 'EMBALADO') {
+                    console.log('Omitido por proceso EMBALADO:', nvNumber, codProc, row.PROCESO);
+                    continue;
+                }
 
                 // Verificar si NVNUMERO está en la tabla nv_hechas
                 const nvHechasCheck = await transaction.request().query(`
                     SELECT 1 FROM REPORTES.dbo.nv_hechas WHERE NVENTA = ${nvNumber}
                 `);
-                if (nvHechasCheck.recordset.length > 0) continue;
+                if (nvHechasCheck.recordset.length > 0) {
+                    console.log('Omitido por estar en nv_hechas:', nvNumber, codProc);
+                    continue;
+                }
+
+                if (existingKeys.has(uniqueKey)) {
+                    continue;
+                }
 
                 // Convertir todos los valores a tipos compatibles con MSSQL
                 const params = {
@@ -192,7 +196,7 @@ export async function keepAlive() {
                     FECHA_ENTREGA: new Date(row.fecha_entrega).toISOString().split('T')[0] || '1970-01-01',
                     CONCAUTO: String(row.ConcAuto || ''),
                     CODPROD: String(row.CodProd || ''),
-                    NVCANT: Number(row.nvCant) || 0,
+                    NVCANT: Number(row.cant_vendida) || 0, // <-- corregido
                     CANT_FACT: Number(row.cant_fact) || 0,
                     DIF_FACT: Number(row.dif_fact) || 0,
                     NVPRECIO: Number(row.nvPrecio) || 0,
@@ -201,9 +205,11 @@ export async function keepAlive() {
                     CODPROC: codProc,
                     PROCESO: String(row.PROCESO || ''),
                     DESCPROC: String(row.DescProc || ''),
-                    TIEMPO: Number(row.tiempo) || 0,
-                    CANTPROD: Number(row.CantProd) || 0
+                    TIEMPO: Number(row.tiempo) || 0
                 };
+
+                // Mostrar registro que se va a insertar
+                console.log('Insertando registro:', params);
 
                 await transaction.request()
                     .input('NVNUMERO', sql.Int, params.NVNUMERO)
@@ -222,7 +228,6 @@ export async function keepAlive() {
                     .input('PROCESO', sql.NVarChar, params.PROCESO)
                     .input('DESCPROC', sql.NVarChar, params.DESCPROC)
                     .input('TIEMPO', sql.Int, params.TIEMPO)
-                    .input('CANTPROD', sql.Int, params.CANTPROD)
                     .query(insertStatement);
 
                 existingKeys.add(uniqueKey);
