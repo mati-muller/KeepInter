@@ -219,10 +219,7 @@ export async function keepAlive() {
                     skippedByNvHechas++;
                     skippedCount++;
                     continue;
-                }
-
-                if (existingKeys.has(uniqueKey)) {
-                    console.log('  → Omitido por clave duplicada:', uniqueKey);
+                }                if (existingKeys.has(uniqueKey)) {
                     skippedByDuplicate++;
                     skippedCount++;
                     continue;
