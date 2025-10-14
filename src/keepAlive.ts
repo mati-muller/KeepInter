@@ -183,9 +183,7 @@ export async function keepAlive() {
             });
             
             console.log(`\nNotas de venta a procesar: ${nvGroups.size}`);
-            for (const [nv, data] of nvGroups) {
-                console.log(`  NV ${nv}: ${data.productos.size} productos, ${data.procesos} procesos`);
-            }
+
             console.log(`\n--- PROCESANDO REGISTROS ---`);
             
             for (const row of rows) {
@@ -195,7 +193,7 @@ export async function keepAlive() {
                 const codProc = String(row.CodProc || '').trim(); // Corregido: CodProc con mayúscula
                 const proceso = String(row.PROCESO || '').trim();
                 const uniqueKey = `${nvNumber}-${codProd}-${codProc}-${proceso}`;                // Log del registro que se está procesando
-                console.log(`Procesando registro ${totalProcessed}/${rows.length}: NV=${nvNumber}, Prod=${codProd}, Proc=${codProc}, Proceso=${proceso}`);
+               
 
                 // Validar que CODPROC no sea null o vacío (esto podría estar causando problemas)
                 if (!codProc || codProc === '' || codProc === 'null') {
