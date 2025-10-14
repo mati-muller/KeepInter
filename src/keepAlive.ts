@@ -136,17 +136,15 @@ export async function keepAlive() {
         const transaction = new sql.Transaction(connection2);
         await transaction.begin();
         transactionActive = true;
-        
-        try {
-            // 1. Obtener llaves únicas existentes
+          try {            // 1. Obtener llaves únicas existentes (incluir CODPROD y PROCESO para evitar conflictos)
             const existingKeys = new Set();
             const existingRecords = await transaction.request().query(`
-                SELECT NVNUMERO, COALESCE(CODPROC, '') AS CODPROC 
+                SELECT NVNUMERO, COALESCE(CODPROD, '') AS CODPROD, COALESCE(CODPROC, '') AS CODPROC, COALESCE(PROCESO, '') AS PROCESO
                 FROM REPORTES.dbo.procesos;
             `);
             
             existingRecords.recordset.forEach((record) => {
-                existingKeys.add(`${record.NVNUMERO}-${record.CODPROC}`);
+                existingKeys.add(`${record.NVNUMERO}-${record.CODPROD}-${record.CODPROC}-${record.PROCESO}`);
             });
 
             // 2. Preparar statement de inserción
@@ -160,18 +158,55 @@ export async function keepAlive() {
             const insertStatement = `
                 INSERT INTO REPORTES.dbo.procesos (${insertColumns.join(', ')})
                 VALUES (${insertColumns.map((col) => `@${col}`).join(', ')})
-            `;
-
-            // 3. Procesar registros with conversion of types
+            `;            // 3. Procesar registros with conversion of types
             let insertedCount = 0;
-            for (const row of rows) {
-                // Conversión de tipos y manejo de valores
+            let skippedCount = 0;
+            let skippedByEmbalado = 0;
+            let skippedByNvHechas = 0;
+            let skippedByDuplicate = 0;
+            let skippedByNullProcess = 0;
+            let totalProcessed = 0;
+            
+            console.log(`\n=== INICIANDO PROCESAMIENTO ===`);
+            console.log(`Total de registros obtenidos de la query: ${rows.length}`);
+            console.log(`Total de claves existentes en BD: ${existingKeys.size}`);
+            
+            // Agrupar por NV para mostrar estadísticas
+            const nvGroups = new Map();
+            rows.forEach(row => {
                 const nvNumber = Number(row.NVNumero) || 0;
-                const codProc = String(row.codProc || '').trim();
-                const uniqueKey = `${nvNumber}-${codProc}`;
+                if (!nvGroups.has(nvNumber)) {
+                    nvGroups.set(nvNumber, { productos: new Set(), procesos: 0 });
+                }
+                nvGroups.get(nvNumber).productos.add(String(row.CodProd || ''));
+                nvGroups.get(nvNumber).procesos++;
+            });
+            
+            console.log(`\nNotas de venta a procesar: ${nvGroups.size}`);
+            for (const [nv, data] of nvGroups) {
+                console.log(`  NV ${nv}: ${data.productos.size} productos, ${data.procesos} procesos`);
+            }
+            console.log(`\n--- PROCESANDO REGISTROS ---`);
+            
+            for (const row of rows) {
+                totalProcessed++;                // Conversión de tipos y manejo de valores
+                const nvNumber = Number(row.NVNumero) || 0;
+                const codProd = String(row.CodProd || '').trim();
+                const codProc = String(row.CodProc || '').trim(); // Corregido: CodProc con mayúscula
+                const proceso = String(row.PROCESO || '').trim();
+                const uniqueKey = `${nvNumber}-${codProd}-${codProc}-${proceso}`;                // Log del registro que se está procesando
+                console.log(`Procesando registro ${totalProcessed}/${rows.length}: NV=${nvNumber}, Prod=${codProd}, Proc=${codProc}, Proceso=${proceso}`);
 
-                if (String(row.PROCESO || '').toUpperCase() === 'EMBALADO') {
-                    console.log('Omitido por proceso EMBALADO:', nvNumber, codProc, row.PROCESO);
+                // Validar que CODPROC no sea null o vacío (esto podría estar causando problemas)
+                if (!codProc || codProc === '' || codProc === 'null') {
+                    console.log('  → Omitido por CODPROC nulo o vacío');
+                    skippedByNullProcess++;
+                    skippedCount++;
+                    continue;
+                }                if (proceso.toUpperCase() === 'EMBALADO') {
+                    console.log('  → Omitido por proceso EMBALADO');
+                    skippedByEmbalado++;
+                    skippedCount++;
                     continue;
                 }
 
@@ -180,11 +215,16 @@ export async function keepAlive() {
                     SELECT 1 FROM REPORTES.dbo.nv_hechas WHERE NVENTA = ${nvNumber}
                 `);
                 if (nvHechasCheck.recordset.length > 0) {
-                    console.log('Omitido por estar en nv_hechas:', nvNumber, codProc);
+                    console.log('  → Omitido por estar en nv_hechas');
+                    skippedByNvHechas++;
+                    skippedCount++;
                     continue;
                 }
 
                 if (existingKeys.has(uniqueKey)) {
+                    console.log('  → Omitido por clave duplicada:', uniqueKey);
+                    skippedByDuplicate++;
+                    skippedCount++;
                     continue;
                 }
 
@@ -206,37 +246,48 @@ export async function keepAlive() {
                     PROCESO: String(row.PROCESO || ''),
                     DESCPROC: String(row.DescProc || ''),
                     TIEMPO: Number(row.tiempo) || 0
-                };
+                };                // Mostrar registro que se va a insertar
+                console.log('  → Insertando registro con clave:', uniqueKey);
 
-                // Mostrar registro que se va a insertar
-                console.log('Insertando registro:', params);
+                try {
+                    await transaction.request()
+                        .input('NVNUMERO', sql.Int, params.NVNUMERO)
+                        .input('NVESTADO', sql.NVarChar, params.NVESTADO)
+                        .input('FECHA_NV', sql.NVarChar, params.FECHA_NV)
+                        .input('FECHA_ENTREGA', sql.NVarChar, params.FECHA_ENTREGA)
+                        .input('CONCAUTO', sql.NVarChar, params.CONCAUTO)
+                        .input('CODPROD', sql.NVarChar, params.CODPROD)
+                        .input('NVCANT', sql.Int, params.NVCANT)
+                        .input('CANT_FACT', sql.Int, params.CANT_FACT)
+                        .input('DIF_FACT', sql.Int, params.DIF_FACT)
+                        .input('NVPRECIO', sql.Decimal, params.NVPRECIO)
+                        .input('DETPROD', sql.NVarChar, params.DETPROD)
+                        .input('NOMAUX', sql.NVarChar, params.NOMAUX)
+                        .input('CODPROC', sql.NVarChar, params.CODPROC)
+                        .input('PROCESO', sql.NVarChar, params.PROCESO)
+                        .input('DESCPROC', sql.NVarChar, params.DESCPROC)
+                        .input('TIEMPO', sql.Int, params.TIEMPO)
+                        .query(insertStatement);
 
-                await transaction.request()
-                    .input('NVNUMERO', sql.Int, params.NVNUMERO)
-                    .input('NVESTADO', sql.NVarChar, params.NVESTADO)
-                    .input('FECHA_NV', sql.NVarChar, params.FECHA_NV)
-                    .input('FECHA_ENTREGA', sql.NVarChar, params.FECHA_ENTREGA)
-                    .input('CONCAUTO', sql.NVarChar, params.CONCAUTO)
-                    .input('CODPROD', sql.NVarChar, params.CODPROD)
-                    .input('NVCANT', sql.Int, params.NVCANT)
-                    .input('CANT_FACT', sql.Int, params.CANT_FACT)
-                    .input('DIF_FACT', sql.Int, params.DIF_FACT)
-                    .input('NVPRECIO', sql.Decimal, params.NVPRECIO)
-                    .input('DETPROD', sql.NVarChar, params.DETPROD)
-                    .input('NOMAUX', sql.NVarChar, params.NOMAUX)
-                    .input('CODPROC', sql.NVarChar, params.CODPROC)
-                    .input('PROCESO', sql.NVarChar, params.PROCESO)
-                    .input('DESCPROC', sql.NVarChar, params.DESCPROC)
-                    .input('TIEMPO', sql.Int, params.TIEMPO)
-                    .query(insertStatement);
-
-                existingKeys.add(uniqueKey);
-                insertedCount++;
-            }
-
-            await transaction.commit();
+                    existingKeys.add(uniqueKey);
+                    insertedCount++;
+                    console.log('  ✓ Registro insertado exitosamente');                } catch (insertError: any) {
+                    console.error(`  ✗ Error insertando registro ${uniqueKey}:`, insertError.message);
+                    skippedCount++;
+                    continue;
+                }
+            }            await transaction.commit();
             transactionActive = false;
-            console.log(`Insertados ${insertedCount} registros nuevos`);
+            console.log(`\n=== RESUMEN DE PROCESAMIENTO ===`);
+            console.log(`Total registros procesados: ${totalProcessed}`);
+            console.log(`Registros insertados: ${insertedCount}`);
+            console.log(`Registros omitidos: ${skippedCount}`);
+            console.log(`  - Por CODPROC nulo/vacío: ${skippedByNullProcess}`);
+            console.log(`  - Por proceso EMBALADO: ${skippedByEmbalado}`);
+            console.log(`  - Por estar en nv_hechas: ${skippedByNvHechas}`);
+            console.log(`  - Por clave duplicada: ${skippedByDuplicate}`);
+            console.log(`Porcentaje de inserción: ${((insertedCount / totalProcessed) * 100).toFixed(2)}%`);            // Mostrar estadísticas adicionales
+            console.log(`\nRegistros insertados exitosamente: ${insertedCount}`);
 
             // Insert into procesos2
             const procesosRows = await connection2.request().query(`
