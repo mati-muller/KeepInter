@@ -130,21 +130,20 @@ export async function keepAlive() {
                 [USER] NVARCHAR(MAX) DEFAULT NULL,
                 FOREIGN KEY (ID) REFERENCES REPORTES.dbo.procesos(ID)
             );
-        `);
-
-        // Iniciar transacción
+        `);        // Iniciar transacción
         const transaction = new sql.Transaction(connection2);
         await transaction.begin();
         transactionActive = true;
-          try {            // 1. Obtener llaves únicas existentes (incluir CODPROD y PROCESO para evitar conflictos)
+          try {
+            // 1. Obtener llaves únicas existentes (NVNUMERO + PROCESO)
             const existingKeys = new Set();
             const existingRecords = await transaction.request().query(`
-                SELECT NVNUMERO, COALESCE(CODPROD, '') AS CODPROD, COALESCE(CODPROC, '') AS CODPROC, COALESCE(PROCESO, '') AS PROCESO
+                SELECT NVNUMERO, COALESCE(PROCESO, '') AS PROCESO
                 FROM REPORTES.dbo.procesos;
             `);
             
             existingRecords.recordset.forEach((record) => {
-                existingKeys.add(`${record.NVNUMERO}-${record.CODPROD}-${record.CODPROC}-${record.PROCESO}`);
+                existingKeys.add(`${record.NVNUMERO}-${record.PROCESO}`);
             });
 
             // 2. Preparar statement de inserción
@@ -154,17 +153,15 @@ export async function keepAlive() {
                 'NVPRECIO', 'DETPROD', 'NOMAUX', 'CODPROC', 'PROCESO',
                 'DESCPROC', 'TIEMPO'
             ];
-            
-            const insertStatement = `
+              const insertStatement = `
                 INSERT INTO REPORTES.dbo.procesos (${insertColumns.join(', ')})
                 VALUES (${insertColumns.map((col) => `@${col}`).join(', ')})
             `;            // 3. Procesar registros with conversion of types
             let insertedCount = 0;
             let skippedCount = 0;
             let skippedByEmbalado = 0;
-            let skippedByNvHechas = 0;
             let skippedByDuplicate = 0;
-            let skippedByNullProcess = 0;
+            let skippedByNullCodProd = 0;
             let totalProcessed = 0;
             
             console.log(`\n=== INICIANDO PROCESAMIENTO ===`);
@@ -184,46 +181,30 @@ export async function keepAlive() {
             
             console.log(`\nNotas de venta a procesar: ${nvGroups.size}`);
 
-            console.log(`\n--- PROCESANDO REGISTROS ---`);
-            
+            console.log(`\n--- PROCESANDO REGISTROS ---`); 
+
             for (const row of rows) {
                 totalProcessed++;                // Conversión de tipos y manejo de valores
                 const nvNumber = Number(row.NVNumero) || 0;
                 const codProd = String(row.CodProd || '').trim();
-                const codProc = String(row.CodProc || '').trim(); // Corregido: CodProc con mayúscula
+                const codProc = String(row.CodProc || '').trim();
                 const proceso = String(row.PROCESO || '').trim();
-                const uniqueKey = `${nvNumber}-${codProd}-${codProc}-${proceso}`;                // Log del registro que se está procesando
-               
+                const uniqueKey = `${nvNumber}-${proceso}`;
 
-                // Validar que CODPROC no sea null o vacío (esto podría estar causando problemas)
-                if (!codProc || codProc === '' || codProc === 'null') {
-                    console.log('  → Omitido por CODPROC nulo o vacío');
-                    skippedByNullProcess++;
-                    skippedCount++;
-                    continue;
-                }                if (proceso.toUpperCase() === 'EMBALADO') {
+
+
+                if (proceso.toUpperCase() === 'EMBALADO') {
                     console.log('  → Omitido por proceso EMBALADO');
                     skippedByEmbalado++;
                     skippedCount++;
                     continue;
                 }
 
-                // Verificar si NVNUMERO está en la tabla nv_hechas
-                const nvHechasCheck = await transaction.request().query(`
-                    SELECT 1 FROM REPORTES.dbo.nv_hechas WHERE NVENTA = ${nvNumber}
-                `);
-                if (nvHechasCheck.recordset.length > 0) {
-                    console.log('  → Omitido por estar en nv_hechas');
-                    skippedByNvHechas++;
-                    skippedCount++;
-                    continue;
-                }                if (existingKeys.has(uniqueKey)) {
+                if (existingKeys.has(uniqueKey)) {
                     skippedByDuplicate++;
                     skippedCount++;
                     continue;
-                }
-
-                // Convertir todos los valores a tipos compatibles con MSSQL
+                }// Convertir todos los valores a tipos compatibles con MSSQL
                 const params = {
                     NVNUMERO: nvNumber,
                     NVESTADO: String(row.nvEstado || ''),
@@ -231,7 +212,7 @@ export async function keepAlive() {
                     FECHA_ENTREGA: new Date(row.fecha_entrega).toISOString().split('T')[0] || '1970-01-01',
                     CONCAUTO: String(row.ConcAuto || ''),
                     CODPROD: String(row.CodProd || ''),
-                    NVCANT: Number(row.cant_vendida) || 0, // <-- corregido
+                    NVCANT: Number(row.cant_vendida) || 0,
                     CANT_FACT: Number(row.cant_fact) || 0,
                     DIF_FACT: Number(row.dif_fact) || 0,
                     NVPRECIO: Number(row.nvPrecio) || 0,
@@ -239,9 +220,11 @@ export async function keepAlive() {
                     NOMAUX: String(row.NomAux || ''),
                     CODPROC: codProc,
                     PROCESO: String(row.PROCESO || ''),
-                    DESCPROC: String(row.DescProc || ''),
+                    DESCPROC: String(row.DescProc || '').trim() || null,
                     TIEMPO: Number(row.tiempo) || 0
-                };                // Mostrar registro que se va a insertar
+                };
+
+                // Mostrar registro que se va a insertar
                 console.log('  → Insertando registro con clave:', uniqueKey);
 
                 try {
@@ -256,32 +239,32 @@ export async function keepAlive() {
                         .input('CANT_FACT', sql.Int, params.CANT_FACT)
                         .input('DIF_FACT', sql.Int, params.DIF_FACT)
                         .input('NVPRECIO', sql.Decimal, params.NVPRECIO)
-                        .input('DETPROD', sql.NVarChar, params.DETPROD)
-                        .input('NOMAUX', sql.NVarChar, params.NOMAUX)
+                        .input('DETPROD', sql.NVarChar, params.DETPROD)                        .input('NOMAUX', sql.NVarChar, params.NOMAUX)
                         .input('CODPROC', sql.NVarChar, params.CODPROC)
                         .input('PROCESO', sql.NVarChar, params.PROCESO)
-                        .input('DESCPROC', sql.NVarChar, params.DESCPROC)
+                        .input('DESCPROC', sql.NVarChar(sql.MAX), params.DESCPROC)
                         .input('TIEMPO', sql.Int, params.TIEMPO)
-                        .query(insertStatement);
-
-                    existingKeys.add(uniqueKey);
+                        .query(insertStatement);                    existingKeys.add(uniqueKey);
                     insertedCount++;
-                    console.log('  ✓ Registro insertado exitosamente');                } catch (insertError: any) {
+                    console.log('  ✓ Registro insertado exitosamente');
+                } catch (insertError: any) {
                     console.error(`  ✗ Error insertando registro ${uniqueKey}:`, insertError.message);
                     skippedCount++;
                     continue;
                 }
-            }            await transaction.commit();
-            transactionActive = false;
-            console.log(`\n=== RESUMEN DE PROCESAMIENTO ===`);
+            }
+
+            await transaction.commit();
+            transactionActive = false;            console.log(`\n=== RESUMEN DE PROCESAMIENTO ===`);
             console.log(`Total registros procesados: ${totalProcessed}`);
             console.log(`Registros insertados: ${insertedCount}`);
             console.log(`Registros omitidos: ${skippedCount}`);
-            console.log(`  - Por CODPROC nulo/vacío: ${skippedByNullProcess}`);
+            console.log(`  - Por CODPROD nulo/0/vacío: ${skippedByNullCodProd}`);
             console.log(`  - Por proceso EMBALADO: ${skippedByEmbalado}`);
-            console.log(`  - Por estar en nv_hechas: ${skippedByNvHechas}`);
             console.log(`  - Por clave duplicada: ${skippedByDuplicate}`);
-            console.log(`Porcentaje de inserción: ${((insertedCount / totalProcessed) * 100).toFixed(2)}%`);            // Mostrar estadísticas adicionales
+            console.log(`Porcentaje de inserción: ${((insertedCount / totalProcessed) * 100).toFixed(2)}%`);
+
+            // Mostrar estadísticas adicionales
             console.log(`\nRegistros insertados exitosamente: ${insertedCount}`);
 
             // Insert into procesos2
