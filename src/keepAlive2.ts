@@ -16,11 +16,22 @@ export async function keepAlive2() {
         // Iniciar transacción
         const transaction = new sql.Transaction(connection);
         await transaction.begin();
-        transactionActive = true;
+        transactionActive = true;        try {
+            // Primero eliminar registros de HISTORIAL que estén relacionados
+            const historialDeleteResult = await transaction.request().query(`
+                DELETE FROM REPORTES.dbo.HISTORIAL
+                WHERE ID_PROCESO IN (
+                    SELECT p.ID
+                    FROM REPORTES.dbo.procesos p
+                    LEFT JOIN REPORTES.dbo.procesos2 p2 ON p.ID = p2.ID
+                    WHERE (p2.ESTADO_PROC = 'LISTO' OR p2.ID IS NULL)
+                    AND CONVERT(DATE, p.FECHA_ENTREGA, 120) < CONVERT(DATE, DATEADD(MONTH, -6, GETDATE()), 120)
+                );
+            `);
+            console.log(`Registros de HISTORIAL eliminados: ${historialDeleteResult.rowsAffected[0]}`);
 
-        try {
             // Eliminar registros de procesos2
-            await transaction.request().query(`
+            const procesos2DeleteResult = await transaction.request().query(`
                 DELETE FROM REPORTES.dbo.procesos2
                 WHERE ID IN (
                     SELECT p2.ID
@@ -30,13 +41,15 @@ export async function keepAlive2() {
                     AND CONVERT(DATE, p.FECHA_ENTREGA, 120) < CONVERT(DATE, DATEADD(MONTH, -6, GETDATE()), 120)
                 );
             `);
+            console.log(`Registros de procesos2 eliminados: ${procesos2DeleteResult.rowsAffected[0]}`);
 
             // Eliminar registros de procesos
-            await transaction.request().query(`
+            const procesosDeleteResult = await transaction.request().query(`
                 DELETE FROM REPORTES.dbo.procesos
                 WHERE ID NOT IN (SELECT ID FROM REPORTES.dbo.procesos2)
                 AND CONVERT(DATE, FECHA_ENTREGA, 120) < CONVERT(DATE, DATEADD(MONTH, -6, GETDATE()), 120);
             `);
+            console.log(`Registros de procesos eliminados: ${procesosDeleteResult.rowsAffected[0]}`);
 
             await transaction.commit();
             transactionActive = false;

@@ -10,11 +10,9 @@ export async function keepAliveRecetas() {
 
     try {
         // Conexión a SQL Server
-        connection1 = await sql.connect(dbConfig1);
-
-        // Ejecutar consulta principal
+        connection1 = await sql.connect(dbConfig1);        // Ejecutar consulta principal (sin DISTINCT para obtener todas las placas)
         const result = await connection1.request().query(`
-            SELECT DISTINCT
+            SELECT
                 t1.CodProd,
                 CASE 
                     WHEN t1.CodMat = 'PLA21001730004C20 ' THEN 'PLA21001730004C20'
@@ -52,59 +50,68 @@ export async function keepAliveRecetas() {
         const rows = result.recordset;
 
         // Conexión a SQL Server (segunda base de datos)
-        connection2 = await sql.connect(dbConfig2);
-
-        // Crear la tabla REPORTES.recetas si no existe
+        connection2 = await sql.connect(dbConfig2);        // Crear la tabla REPORTES.recetas si no existe
         await connection2.request().query(`
             IF OBJECT_ID('REPORTES.dbo.recetas', 'U') IS NULL
             BEGIN
                 CREATE TABLE REPORTES.dbo.recetas (
-                    CodProd NVARCHAR(255),
-                    CodMat NVARCHAR(MAX) DEFAULT NULL,
+                    CodProd NVARCHAR(255) NOT NULL,
+                    CodMat NVARCHAR(255) NOT NULL,
                     DesProd NVARCHAR(MAX) DEFAULT NULL,
-                    CantMat DECIMAL(10,3) DEFAULT NULL
+                    CantMat DECIMAL(10,3) DEFAULT NULL,
+                    PRIMARY KEY (CodProd, CodMat)
                 );
             END
-        `);
-
-        // Obtener datos existentes de la tabla recetas
+        `);        // Obtener datos existentes de la tabla recetas
         const existingRecords = await connection2.request().query(`
             SELECT CodProd, CodMat, DesProd, CantMat FROM REPORTES.dbo.recetas
         `);
 
+        // Crear un Map con clave compuesta (CodProd:CodMat) para evitar duplicados
         const existingData = new Map(
-            existingRecords.recordset.map(record => [record.CodProd, record])
+            existingRecords.recordset.map(record => [
+                `${record.CodProd}:${record.CodMat}`,
+                record
+            ])
         );
 
-        // Usar transacción para operaciones masivas
+        // Eliminar duplicados en los datos nuevos usando clave compuesta
+        const uniqueRows = new Map();
+        for (const row of rows) {
+            const key = `${row.CodProd}:${row.CodMat}`;
+            uniqueRows.set(key, row);
+        }        // Usar transacción para operaciones masivas
         const transaction = new sql.Transaction(connection2);
         await transaction.begin();
 
-        for (const row of rows) {
-            const existingRecord = existingData.get(row.CodProd);
+        let insertCount = 0;
+        let updateCount = 0;
+
+        for (const [key, row] of uniqueRows) {
+            const existingRecord = existingData.get(key);
 
             // Crear un nuevo objeto request para cada operación
-            const request = transaction.request();
-
-            if (existingRecord) {
-                // Actualizar solo si hay cambios
-                if (
-                    existingRecord.CodMat !== row.CodMat ||
-                    existingRecord.DesProd !== row.DesProd ||
-                    existingRecord.CantMat !== row.CantMat
-                ) {
+            const request = transaction.request();            if (existingRecord) {
+                // Actualizar solo si hay cambios en DesProd o CantMat
+                const desProdChanged = String(existingRecord.DesProd).trim() !== String(row.DesProd).trim();
+                const cantMatChanged = parseFloat(existingRecord.CantMat) !== parseFloat(row.CantMat);
+                
+                if (desProdChanged || cantMatChanged) {
+                    console.log(`UPDATE: CodProd=${row.CodProd}, CodMat=${row.CodMat}, DesProd=${row.DesProd}, CantMat=${row.CantMat} (DesProdChanged=${desProdChanged}, CantMatChanged=${cantMatChanged})`);
                     await request.input('CodProd', sql.NVarChar, row.CodProd)
                         .input('CodMat', sql.NVarChar, row.CodMat)
                         .input('DesProd', sql.NVarChar, row.DesProd)
                         .input('CantMat', sql.Decimal(10, 3), row.CantMat)
                         .query(`
                             UPDATE REPORTES.dbo.recetas
-                            SET CodMat = @CodMat, DesProd = @DesProd, CantMat = @CantMat
-                            WHERE CodProd = @CodProd
+                            SET DesProd = @DesProd, CantMat = @CantMat
+                            WHERE CodProd = @CodProd AND CodMat = @CodMat
                         `);
+                    updateCount++;
                 }
             } else {
                 // Insertar nuevo registro
+                console.log(`INSERT: CodProd=${row.CodProd}, CodMat=${row.CodMat}, DesProd=${row.DesProd}, CantMat=${row.CantMat}`);
                 await request.input('CodProd', sql.NVarChar, row.CodProd)
                     .input('CodMat', sql.NVarChar, row.CodMat)
                     .input('DesProd', sql.NVarChar, row.DesProd)
@@ -113,11 +120,27 @@ export async function keepAliveRecetas() {
                         INSERT INTO REPORTES.dbo.recetas (CodProd, CodMat, DesProd, CantMat)
                         VALUES (@CodProd, @CodMat, @DesProd, @CantMat)
                     `);
+                insertCount++;
             }
-        }
+        }        await transaction.commit();
+        console.log(`Registros procesados: ${insertCount} insertados, ${updateCount} actualizados.`);
 
-        await transaction.commit();
-        console.log('Registros procesados correctamente.');
+        // Eliminar duplicados: mantener solo el primer registro de cada CodProd + CodMat
+        console.log('Eliminando duplicados...');
+        const deleteResult = await connection2.request().query(`
+            WITH RankedRecetas AS (
+                SELECT 
+                    CodProd, 
+                    CodMat, 
+                    DesProd, 
+                    CantMat,
+                    ROW_NUMBER() OVER (PARTITION BY CodProd, CodMat ORDER BY (SELECT NULL)) as rn
+                FROM REPORTES.dbo.recetas
+            )
+            DELETE FROM RankedRecetas
+            WHERE rn > 1;
+        `);
+        console.log(`Duplicados eliminados: ${deleteResult.rowsAffected[0]} registros borrados.`);
 
     } catch (err) {
         console.error('Error en proceso:', err);
