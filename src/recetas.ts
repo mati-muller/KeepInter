@@ -123,9 +123,7 @@ export async function keepAliveRecetas() {
                 insertCount++;
             }
         }        await transaction.commit();
-        console.log(`Registros procesados: ${insertCount} insertados, ${updateCount} actualizados.`);
-
-        // Eliminar duplicados: mantener solo el primer registro de cada CodProd + CodMat
+        console.log(`Registros procesados: ${insertCount} insertados, ${updateCount} actualizados.`);        // Eliminar duplicados: mantener solo el primer registro de cada CodProd + CodMat
         console.log('Eliminando duplicados...');
         const deleteResult = await connection2.request().query(`
             WITH RankedRecetas AS (
@@ -134,7 +132,7 @@ export async function keepAliveRecetas() {
                     CodMat, 
                     DesProd, 
                     CantMat,
-                    ROW_NUMBER() OVER (PARTITION BY CodProd, CodMat ORDER BY (SELECT NULL)) as rn
+                    ROW_NUMBER() OVER (PARTITION BY CodProd, CodMat ORDER BY CodProd, CodMat) as rn
                 FROM REPORTES.dbo.recetas
             )
             DELETE FROM RankedRecetas
