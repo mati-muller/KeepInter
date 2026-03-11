@@ -218,6 +218,34 @@ export async function keepAlive() {
                     skippedCount++;
                     continue;
                 }                if (existingKeys.has(uniqueKey)) {
+                    // Actualizar campos que pueden cambiar sin tocar la clave
+                    try {
+                        await transaction.request()
+                            .input('NVNUMERO', sql.Int, nvNumber)
+                            .input('CODPROD', sql.NVarChar, codProd)
+                            .input('CODPROC', sql.NVarChar, codProc)
+                            .input('PROCESO', sql.NVarChar, proceso)
+                            .input('NVCANT', sql.Int, Number(row.cant_vendida) || 0)
+                            .input('NOMAUX', sql.NVarChar, String(row.NomAux || ''))
+                            .input('CANT_FACT', sql.Int, Number(row.cant_fact) || 0)
+                            .input('DIF_FACT', sql.Int, Number(row.dif_fact) || 0)
+                            .input('FECHA_ENTREGA', sql.NVarChar, new Date(row.fecha_entrega).toISOString().split('T')[0] || '1970-01-01')
+                            .query(`
+                                UPDATE REPORTES.dbo.procesos
+                                SET 
+                                    NVCANT       = @NVCANT,
+                                    NOMAUX       = @NOMAUX,
+                                    CANT_FACT    = @CANT_FACT,
+                                    DIF_FACT     = @DIF_FACT,
+                                    FECHA_ENTREGA = @FECHA_ENTREGA
+                                WHERE NVNUMERO = @NVNUMERO
+                                  AND COALESCE(CODPROD, '') = @CODPROD
+                                  AND COALESCE(CODPROC, '') = @CODPROC
+                                  AND COALESCE(PROCESO, '') = @PROCESO
+                            `);
+                    } catch (updateError: any) {
+                        console.error(`  ✗ Error actualizando registro ${uniqueKey}:`, updateError.message);
+                    }
                     skippedByDuplicate++;
                     skippedCount++;
                     continue;
@@ -271,7 +299,33 @@ export async function keepAlive() {
                     skippedCount++;
                     continue;
                 }
-            }            await transaction.commit();
+            }            // Insert/Update procesos2 dentro de la misma transacción (antes del commit)
+            const procesosRows = await transaction.request().query(`
+                SELECT p.ID, p.NVCANT
+                FROM REPORTES.dbo.procesos p
+                LEFT JOIN REPORTES.dbo.procesos2 p2 ON p.ID = p2.ID
+                WHERE p2.ID IS NULL OR p2.CANT_A_PROD <> (p.NVCANT - ISNULL(p2.CANT_PROD, 0))
+            `);
+
+            const insertProcesos2Statement = `
+                MERGE REPORTES.dbo.procesos2 AS target
+                USING (SELECT @ID AS ID, @NVCANT AS NVCANT) AS source
+                ON (target.ID = source.ID)
+                WHEN MATCHED THEN
+                    UPDATE SET CANT_A_PROD = source.NVCANT - ISNULL(target.CANT_PROD, 0)
+                WHEN NOT MATCHED THEN
+                    INSERT (ID, CANT_PROD, CANT_A_PROD) VALUES (source.ID, 0, source.NVCANT);
+            `;
+
+            for (const row of procesosRows.recordset) {
+                await transaction.request()
+                    .input('ID', sql.Int, row.ID)
+                    .input('NVCANT', sql.Int, row.NVCANT)
+                    .query(insertProcesos2Statement);
+            }
+            console.log(`Registros sincronizados en procesos2: ${procesosRows.recordset.length}`);
+
+            await transaction.commit();
             transactionActive = false;
             console.log(`\n=== RESUMEN DE PROCESAMIENTO ===`);
             console.log(`Total registros procesados: ${totalProcessed}`);
@@ -280,32 +334,7 @@ export async function keepAlive() {
             console.log(`  - Por CODPROC nulo/vacío: ${skippedByNullProcess}`);
             console.log(`  - Por proceso EMBALADO: ${skippedByEmbalado}`);
             console.log(`  - Por estar en nv_hechas: ${skippedByNvHechas}`);
-            console.log(`  - Por clave duplicada: ${skippedByDuplicate}`);
-            console.log(`Porcentaje de inserción: ${((insertedCount / totalProcessed) * 100).toFixed(2)}%`);            // Mostrar estadísticas adicionales
-            console.log(`\nRegistros insertados exitosamente: ${insertedCount}`);
-
-            // Insert into procesos2
-            const procesosRows = await connection2.request().query(`
-                SELECT ID, NVCANT FROM REPORTES.dbo.procesos
-            `);
-
-            const insertProcesos2Statement = `
-                MERGE REPORTES.dbo.procesos2 AS target
-                USING (SELECT @ID AS ID, @CANT_PROD AS CANT_PROD, @CANT_A_PROD AS CANT_A_PROD) AS source
-                ON (target.ID = source.ID)
-                WHEN MATCHED AND (target.CANT_A_PROD IS NULL OR target.CANT_PROD IS NULL) THEN 
-                    UPDATE SET CANT_A_PROD = source.CANT_A_PROD, CANT_PROD = source.CANT_PROD
-                WHEN NOT MATCHED THEN
-                    INSERT (ID, CANT_PROD, CANT_A_PROD) VALUES (source.ID, source.CANT_PROD, source.CANT_A_PROD);
-            `;
-
-            for (const row of procesosRows.recordset) {
-                await connection2.request()
-                    .input('ID', sql.Int, row.ID)
-                    .input('CANT_PROD', sql.Int, 0)
-                    .input('CANT_A_PROD', sql.Int, row.NVCANT)
-                    .query(insertProcesos2Statement);
-            }
+            console.log(`  - Por clave duplicada: ${skippedByDuplicate}`);            console.log(`Porcentaje de inserción: ${((insertedCount / totalProcessed) * 100).toFixed(2)}%`);
 
         } catch (insertError) {
             if (transactionActive) {
