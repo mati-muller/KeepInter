@@ -15,7 +15,7 @@ export async function keepAlive() {
         
         // Ejecutar consulta principal
         const result = await connection1.request().query(`
-           SELECT
+            SELECT
     det.NVNumero,
     ven.nvEstado,
     ven.nvFem AS fecha_nv,
@@ -58,6 +58,10 @@ LEFT JOIN (
     FROM PANELSA2017.softland.dworproprod prod
     LEFT JOIN PANELSA2017.softland.dwprocesos procesos 
         ON procesos.CodProc = prod.CodProc
+        group by prod.CodProd, 
+        prod.CodProc,
+        procesos.DescProc, 
+        procesos.TpoEjecPro
 ) P 
     ON det.CodProd = P.CodProd
 LEFT JOIN (
@@ -74,10 +78,11 @@ LEFT JOIN (
     ON fact.nvnumero = det.NVNumero
    AND fact.CodProd = det.CodProd
 WHERE ven.nvEstado = 'A'
-  AND det.NVNumero >= 13215
-  AND det.NVNumero NOT IN (13388, 13344, 13433, 13427)
+  AND det.NVNumero >= 13670
+  AND det.NVNumero NOT IN (13388, 13344, 13433, 13427,13623,13723,13740,13478,13968,13998,14103,14123,14165,14215,14241)
   AND (det.nvCant - ISNULL(fact.cant, 0)) > 0
 ORDER BY det.NVNumero, det.CodProd, P.CodProc;
+
         `);
         
         const rows = result.recordset;
