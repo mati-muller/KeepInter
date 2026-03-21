@@ -73,25 +73,56 @@ export async function keepAliveRecetas() {
                 `${record.CodProd}:${record.CodMat}`,
                 record
             ])
-        );
-
-        // Eliminar duplicados en los datos nuevos usando clave compuesta
+        );        // Eliminar duplicados en los datos nuevos usando clave compuesta
         const uniqueRows = new Map();
         for (const row of rows) {
             const key = `${row.CodProd}:${row.CodMat}`;
             uniqueRows.set(key, row);
-        }        // Usar transacción para operaciones masivas
+        }
+
+        // Crear un mapa de CodProd -> array de CodMat nuevos
+        const newMatsByCodProd = new Map();
+        for (const row of rows) {
+            if (!newMatsByCodProd.has(row.CodProd)) {
+                newMatsByCodProd.set(row.CodProd, []);
+            }
+            newMatsByCodProd.get(row.CodProd).push(row.CodMat);
+        }
+
+        // Usar transacción para operaciones masivas
         const transaction = new sql.Transaction(connection2);
         await transaction.begin();
 
         let insertCount = 0;
         let updateCount = 0;
+        let deleteCount = 0;
 
+        // Primero: Eliminar placas antiguas que ya no existen para cada CodProd
+        for (const [existingKey, existingRecord] of existingData) {
+            const [codProd, codMat] = existingKey.split(':');
+            const newMatsForThisProd = newMatsByCodProd.get(codProd) || [];
+            
+            // Si este CodMat no está en los datos nuevos para este CodProd, eliminarlo
+            if (!newMatsForThisProd.includes(codMat)) {
+                console.log(`DELETE: CodProd=${codProd}, CodMat=${codMat} (placa antigua eliminada)`);
+                const deleteRequest = transaction.request();
+                await deleteRequest.input('CodProd', sql.NVarChar, codProd)
+                    .input('CodMat', sql.NVarChar, codMat)
+                    .query(`
+                        DELETE FROM REPORTES.dbo.recetas
+                        WHERE CodProd = @CodProd AND CodMat = @CodMat
+                    `);
+                deleteCount++;
+            }
+        }
+
+        // Segundo: Insertar o actualizar registros nuevos
         for (const [key, row] of uniqueRows) {
             const existingRecord = existingData.get(key);
 
             // Crear un nuevo objeto request para cada operación
-            const request = transaction.request();            if (existingRecord) {
+            const request = transaction.request();
+            if (existingRecord) {
                 // Actualizar solo si hay cambios en DesProd o CantMat
                 const desProdChanged = String(existingRecord.DesProd).trim() !== String(row.DesProd).trim();
                 const cantMatChanged = parseFloat(existingRecord.CantMat) !== parseFloat(row.CantMat);
@@ -123,22 +154,7 @@ export async function keepAliveRecetas() {
                 insertCount++;
             }
         }        await transaction.commit();
-        console.log(`Registros procesados: ${insertCount} insertados, ${updateCount} actualizados.`);        // Eliminar duplicados: mantener solo el primer registro de cada CodProd + CodMat
-        console.log('Eliminando duplicados...');
-        const deleteResult = await connection2.request().query(`
-            WITH RankedRecetas AS (
-                SELECT 
-                    CodProd, 
-                    CodMat, 
-                    DesProd, 
-                    CantMat,
-                    ROW_NUMBER() OVER (PARTITION BY CodProd, CodMat ORDER BY CodProd, CodMat) as rn
-                FROM REPORTES.dbo.recetas
-            )
-            DELETE FROM RankedRecetas
-            WHERE rn > 1;
-        `);
-        console.log(`Duplicados eliminados: ${deleteResult.rowsAffected[0]} registros borrados.`);
+        console.log(`Registros procesados: ${insertCount} insertados, ${updateCount} actualizados, ${deleteCount} eliminados.`);
 
     } catch (err) {
         console.error('Error en proceso:', err);
