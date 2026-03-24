@@ -162,13 +162,15 @@ ORDER BY det.NVNumero, det.CodProd, P.CodProc;
             let skippedByDuplicate = 0;
             let skippedByNullProcess = 0;
             let totalProcessed = 0;
+            let deletedCount = 0;
             
             console.log(`\n=== INICIANDO PROCESAMIENTO ===`);
             console.log(`Total de registros obtenidos de la query: ${rows.length}`);
             console.log(`Total de claves existentes en BD: ${existingKeys.size}`);
             
-            // Agrupar por NV para mostrar estadísticas
+            // Agrupar por NV para mostrar estadísticas y crear Set de claves válidas
             const nvGroups = new Map();
+            const validKeys = new Set(); // Claves que están en la query (válidas)
             rows.forEach(row => {
                 const nvNumber = Number(row.NVNumero) || 0;
                 if (!nvGroups.has(nvNumber)) {
@@ -266,9 +268,7 @@ ORDER BY det.NVNumero, det.CodProd, P.CodProc;
                     DESCPROC: String(row.DescProc || ''),
                     TIEMPO: Number(row.tiempo) || 0
                 };                // Mostrar registro que se va a insertar
-                console.log('  → Insertando registro con clave:', uniqueKey);
-
-                try {
+                console.log('  → Insertando registro con clave:', uniqueKey);                try {
                     await transaction.request()
                         .input('NVNUMERO', sql.Int, params.NVNUMERO)
                         .input('NVESTADO', sql.NVarChar, params.NVESTADO)
@@ -289,13 +289,64 @@ ORDER BY det.NVNumero, det.CodProd, P.CodProc;
                         .query(insertStatement);
 
                     existingKeys.add(uniqueKey);
+                    validKeys.add(uniqueKey); // Agregar a las claves válidas
                     insertedCount++;
                     console.log('  ✓ Registro insertado exitosamente');                } catch (insertError: any) {
                     console.error(`  ✗ Error insertando registro ${uniqueKey}:`, insertError.message);
                     skippedCount++;
                     continue;
                 }
-            }            // Insert/Update procesos2 dentro de la misma transacción (antes del commit)
+            }
+
+            // 4. Agregar las claves de registros que fueron actualizados (ya existían)
+            rows.forEach(row => {
+                const nvNumber = Number(row.NVNumero) || 0;
+                const codProd = String(row.CodProd || '').trim();
+                const codProc = String(row.CodProc || '').trim();
+                const proceso = String(row.PROCESO || '').trim();
+                const uniqueKey = `${nvNumber}-${codProd}-${codProc}-${proceso}`;
+                validKeys.add(uniqueKey);
+            });            // 5. Eliminar productos de las NV que están en la query pero que ya no existen en ella
+            console.log(`\n--- ELIMINANDO PRODUCTOS QUE FUERON REMOVIDOS ---`);
+            const nvNumbersInQuery = Array.from(nvGroups.keys());
+            console.log(`NV's a procesar eliminaciones: ${nvNumbersInQuery.join(', ')}`);
+            
+            for (const nvNumber of nvNumbersInQuery) {
+                // Buscar todos los registros de esta NV en la BD
+                const recordsInBD = await transaction.request().query(`
+                    SELECT NVNUMERO, COALESCE(CODPROD, '') AS CODPROD, COALESCE(CODPROC, '') AS CODPROC, COALESCE(PROCESO, '') AS PROCESO, ID
+                    FROM REPORTES.dbo.procesos
+                    WHERE NVNUMERO = ${nvNumber}
+                `);
+
+                // Buscar los que no están en las claves válidas (fueron eliminados)
+                for (const record of recordsInBD.recordset) {
+                    const keyInBD = `${record.NVNUMERO}-${record.CODPROD}-${record.CODPROC}-${record.PROCESO}`;
+                    
+                    if (!validKeys.has(keyInBD)) {
+                        console.log(`  → Eliminando registro con clave: ${keyInBD}`);
+                        
+                        try {
+                            // Eliminar de procesos2 primero (relación foránea)
+                            await transaction.request().query(`
+                                DELETE FROM REPORTES.dbo.procesos2
+                                WHERE ID = ${record.ID}
+                            `);
+
+                            // Luego eliminar de procesos
+                            await transaction.request().query(`
+                                DELETE FROM REPORTES.dbo.procesos
+                                WHERE ID = ${record.ID}
+                            `);
+
+                            deletedCount++;
+                            console.log(`  ✓ Registro eliminado exitosamente`);
+                        } catch (deleteError: any) {
+                            console.error(`  ✗ Error eliminando registro ${keyInBD}:`, deleteError.message);
+                        }
+                    }
+                }
+            }// Insert/Update procesos2 dentro de la misma transacción (antes del commit)
             const procesosRows = await transaction.request().query(`
                 SELECT p.ID, p.NVCANT
                 FROM REPORTES.dbo.procesos p
@@ -322,15 +373,16 @@ ORDER BY det.NVNumero, det.CodProd, P.CodProc;
             console.log(`Registros sincronizados en procesos2: ${procesosRows.recordset.length}`);
 
             await transaction.commit();
-            transactionActive = false;
-            console.log(`\n=== RESUMEN DE PROCESAMIENTO ===`);
+            transactionActive = false;            console.log(`\n=== RESUMEN DE PROCESAMIENTO ===`);
             console.log(`Total registros procesados: ${totalProcessed}`);
             console.log(`Registros insertados: ${insertedCount}`);
+            console.log(`Registros actualizados: ${skippedByDuplicate}`);
+            console.log(`Registros eliminados: ${deletedCount}`);
             console.log(`Registros omitidos: ${skippedCount}`);
             console.log(`  - Por CODPROC nulo/vacío: ${skippedByNullProcess}`);
             console.log(`  - Por proceso EMBALADO: ${skippedByEmbalado}`);
             console.log(`  - Por estar en nv_hechas: ${skippedByNvHechas}`);
-            console.log(`  - Por clave duplicada: ${skippedByDuplicate}`);            console.log(`Porcentaje de inserción: ${((insertedCount / totalProcessed) * 100).toFixed(2)}%`);
+            console.log(`Porcentaje de inserción: ${((insertedCount / totalProcessed) * 100).toFixed(2)}%`);
 
         } catch (insertError) {
             if (transactionActive) {
