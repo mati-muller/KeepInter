@@ -256,7 +256,7 @@ ORDER BY det.NVNumero, det.CodProd, P.CodProc;
                     FECHA_NV: new Date(row.fecha_nv).toISOString().split('T')[0] || '1970-01-01',
                     FECHA_ENTREGA: new Date(row.fecha_entrega).toISOString().split('T')[0] || '1970-01-01',
                     CONCAUTO: String(row.ConcAuto || ''),
-                    CODPROD: String(row.CodProd || ''),
+                    CODPROD: codProd,
                     NVCANT: Number(row.cant_vendida) || 0, // <-- corregido
                     CANT_FACT: Number(row.cant_fact) || 0,
                     DIF_FACT: Number(row.dif_fact) || 0,
@@ -264,7 +264,7 @@ ORDER BY det.NVNumero, det.CodProd, P.CodProc;
                     DETPROD: String(row.DetProd || ''),
                     NOMAUX: String(row.NomAux || ''),
                     CODPROC: codProc,
-                    PROCESO: String(row.PROCESO || ''),
+                    PROCESO: proceso,
                     DESCPROC: String(row.DescProc || ''),
                     TIEMPO: Number(row.tiempo) || 0
                 };                // Mostrar registro que se va a insertar
